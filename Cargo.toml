@@ -1,0 +1,21 @@
+[package]
+name = "polars-derive"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+polars = { workspace = true }
+polars-derive-impl = { path = "polars-derive-impl" }
+
+[workspace]
+members = ["polars-derive-impl"]
+
+[workspace.dependencies]
+polars = "0.26.1"
+
+[features]
+default = ["dtype-struct"]
+dtype-struct = ["polars/dtype-struct"]
