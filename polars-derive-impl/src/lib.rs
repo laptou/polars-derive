@@ -1,9 +1,9 @@
 extern crate proc_macro;
-use polars::datatypes::DataType;
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
-use syn::{parse::Parse, spanned::Spanned, ExprMethodCall, ExprStruct, Ident, ItemStruct, Token};
+use syn::{parse::Parse, spanned::Spanned, Ident, ItemStruct, Token};
 
 #[proc_macro_derive(IntoDataFrame, attributes(df))]
 pub fn derive_into_df(input: TokenStream) -> TokenStream {
