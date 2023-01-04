@@ -3,9 +3,6 @@ name = "polars-derive"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-proc-macro = true
-
 [dependencies]
 polars = { workspace = true }
 polars-derive-impl = { path = "polars-derive-impl" }

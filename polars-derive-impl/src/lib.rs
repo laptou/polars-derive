@@ -2,16 +2,45 @@ extern crate proc_macro;
 use polars::datatypes::DataType;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use syn::{parse::Parse, spanned::Spanned, Ident, ItemStruct, ExprStruct, ExprMethodCall};
+use quote::{format_ident, quote, quote_spanned};
+use syn::{parse::Parse, spanned::Spanned, ExprMethodCall, ExprStruct, Ident, ItemStruct, Token};
 
-#[proc_macro_derive(IntoDataFrame, attributes(dtype))]
+#[proc_macro_derive(IntoDataFrame, attributes(df))]
 pub fn derive_into_df(input: TokenStream) -> TokenStream {
     let input = TokenStream2::from(input);
     proc_macro::TokenStream::from(derive_into_df_inner(input))
 }
 
 struct DataFrameTemplate {
-    cols: Vec<DataFrameTemplateColumn>,
+    fields: Vec<DataFrameTemplateColumn>,
+    structure: ItemStruct,
+}
+
+struct DataFrameTemplateOptions(Vec<DataFrameTemplateOption>);
+
+impl Parse for DataFrameTemplateOptions {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let p = syn::punctuated::Punctuated::<DataFrameTemplateOption, Token![,]>::parse_separated_nonempty(input)?;
+        Ok(Self(p.into_iter().collect()))
+    }
+}
+
+enum DataFrameTemplateOption {
+    ConvertTo(syn::Type),
+}
+
+impl Parse for DataFrameTemplateOption {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let id: Ident = input.parse()?;
+
+        match id.to_string().as_str() {
+            "convert_to" => {
+                let ty: syn::TypeParen = input.parse()?;
+                Ok(Self::ConvertTo(*ty.elem))
+            }
+            _ => Err(syn::Error::new(input.span(), "invalid attribute parameter")),
+        }
+    }
 }
 
 impl Parse for DataFrameTemplate {
@@ -26,122 +55,124 @@ impl Parse for DataFrameTemplate {
 
         let mut cols = vec![];
 
-        for field in structure.fields {
-            let dtype = match field.attrs.iter().find(|attr| attr.path.is_ident("dtype")) {
-                Some(attr) => get_dtype_for_spec(attr.parse_args::<ExprMethodCall>()?)?,
-                None => get_dtype_for_rust_type(&field.ty)?,
-            };
+        for (idx, field) in structure.fields.iter().enumerate() {
+            let mut target_ty = None;
+
+            for attr in &field.attrs {
+                if !attr.path.is_ident("df") {
+                    continue;
+                }
+
+                let opts: DataFrameTemplateOptions = attr.parse_args()?;
+
+                for opt in opts.0 {
+                    match opt {
+                        DataFrameTemplateOption::ConvertTo(ty) => target_ty = Some(ty),
+                    }
+                }
+            }
+
+            cols.push(DataFrameTemplateColumn {
+                name: field
+                    .ident
+                    .as_ref()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| idx.to_string()),
+                source_ty: field.ty.clone(),
+                target_ty,
+                span: field.span(),
+            })
         }
 
-        Ok(Self { cols })
+        Ok(Self {
+            fields: cols,
+            structure,
+        })
     }
 }
 
-fn get_dtype_for_spec(spec: ExprMethodCall) -> syn::Result<DataType> {
-    Ok(match spec.method.to_string().as_str() {
-        "Boolean" => DataType::Boolean,
-        "UInt8" => DataType::UInt8,
-        "UInt16" => DataType::UInt16,
-        "UInt32" => DataType::UInt32,
-        "UInt64" => DataType::UInt64,
-        "Int8" => DataType::Int8,
-        "Int16" => DataType::Int16,
-        "Int32" => DataType::Int32,
-        "Int64" => DataType::Int64,
-        "Float32" => DataType::Float32,
-        "Float64" => DataType::Float64,
-        "Utf8" => DataType::Utf8,
-        "Date" => DataType::Date,
-        "Time" => DataType::Time,
-        "Null" => DataType::Null,
-        "Unknown" => DataType::Unknown,
-        _ => return Err(syn::Error::new(
-            spec.span(),
-            "invalid or not implemented",
-        ))
-    })
-}
-
-fn get_dtype_for_rust_type(ty: &syn::Type) -> syn::Result<DataType> {
-    match ty {
-        syn::Type::Array(arr) => match arr.len {
-            #[cfg(feature = "dtype-struct")]
-            syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Int(len),
-                ..
-            }) => {
-                let len: usize = len.base10_parse()?;
-                let element_dtype = get_dtype_for_rust_type(&*arr.elem)?;
-                let fields = (0..len)
-                    .map(|idx| polars::datatypes::Field::new(&idx.to_string(), element_dtype))
-                    .collect();
-
-                return Ok(DataType::Struct(fields));
-            }
-            _ => {
-                return Ok(DataType::List(Box::new(get_dtype_for_rust_type(
-                    &*arr.elem,
-                )?)))
-            }
-        },
-        syn::Type::BareFn(_) => {
-            return Err(syn::Error::new(
-                ty.span(),
-                "this type does not have a polars equivalent",
-            ))
-        }
-        syn::Type::Group(_) => todo!(),
-        syn::Type::Macro(_) | syn::Type::Never(_) | syn::Type::Ptr(_) => {
-            return Err(syn::Error::new(
-                ty.span(),
-                "cannot infer polars dtype from this, use an explicit #[dtype] attribute",
-            ))
-        }
-        syn::Type::Paren(ty) => return get_dtype_for_rust_type(&*ty.elem),
-        syn::Type::Path(ty) => {
-            if let Some(ident) = ty.path.get_ident() {
-                match ident.to_string().as_str() {
-                    "String" | "str" => return Ok(DataType::Utf8),
-                    "u8" => return Ok(DataType::UInt8),
-                    "u16" => return Ok(DataType::UInt16),
-                    "u32" => return Ok(DataType::UInt32),
-                    "u64" => return Ok(DataType::UInt64),
-                    "usize" => {
-                        return Ok(if std::mem::size_of::<usize>() == 8 {
-                            DataType::UInt64
-                        } else {
-                            DataType::UInt32
-                        })
-                    }
-                    "i8" => return Ok(DataType::Int8),
-                    "i16" => return Ok(DataType::Int16),
-                    "i32" => return Ok(DataType::Int32),
-                    "i64" => return Ok(DataType::Int64),
-                    "isize" => {
-                        return Ok(if std::mem::size_of::<isize>() == 8 {
-                            DataType::Int64
-                        } else {
-                            DataType::Int32
-                        })
-                    }
-                    "f32" => return Ok(DataType::Float32),
-                    "f64" => return Ok(DataType::Float64),
-                }
-            }
-        }
-        syn::Type::Reference(_) => todo!(),
-        syn::Type::Slice(_) => todo!(),
-        syn::Type::Tuple(_) => todo!(),
-        syn::Type::Verbatim(_) => todo!(),
-        _ => {}
-    };
-
-    Err(syn::Error::new(
-        ty.span(),
-        "cannot infer polars dtype from this, use an explicit #[dtype] attribute",
-    ))
+struct DataFrameTemplateColumn {
+    name: String,
+    span: proc_macro2::Span,
+    source_ty: syn::Type,
+    /// type that value must be converted into before Polars will accept it
+    target_ty: Option<syn::Type>,
 }
 
 fn derive_into_df_inner(input: TokenStream2) -> TokenStream2 {
+    let template: DataFrameTemplate = match syn::parse2(input) {
+        Ok(template) => template,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
+    let structure = template.structure;
+    let name = structure.ident.clone();
+
+    let series_impl = {
+        let field_vector_names: Vec<_> = template
+            .fields
+            .iter()
+            .map(|field| format_ident!("v_{}", field.name))
+            .collect();
+
+        let field_vector_decls =
+            template
+                .fields
+                .iter()
+                .zip(&field_vector_names)
+                .map(|(field, var_name)| {
+                    let ty = field.target_ty.as_ref().unwrap_or(&field.source_ty);
+                    quote! { let mut #var_name: Vec<#ty> = vec![]; }
+                });
+
+        let field_vector_fillers =
+            template
+                .fields
+                .iter()
+                .zip(&field_vector_names)
+                .map(|(field, var_name)| {
+                    let name = &field.name;
+                    let name_id = quote::format_ident!("{}", name);
+
+                    quote_spanned! {field.span=>
+                        #var_name.push(item.#name_id.into());
+                    }
+                });
+
+        let series_decls =
+            template
+                .fields
+                .iter()
+                .zip(&field_vector_names)
+                .map(|(field, var_name)| {
+                    let name = &field.name;
+
+                    quote_spanned! {field.span=>
+                        <::polars::series::Series as ::polars::prelude::NamedFrom<_, _>>::new(
+                            #name,
+                            #var_name.as_slice()
+                        )
+                    }
+                });
+
+        quote! {
+            #(#field_vector_decls)*
+
+            for item in rows {
+                #(#field_vector_fillers)*
+            }
+
+            vec![
+                #(#series_decls),*
+            ]
+        }
+    };
+
+    quote! {
+        impl IntoDataFrame for #name {
+            fn into_series(rows: impl Iterator<Item = Self>) -> Vec<::polars::series::Series> {
+                #series_impl
+            }
+        }
+    }
 }
