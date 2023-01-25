@@ -27,6 +27,7 @@ impl Parse for DataFrameTemplateOptions {
 
 enum DataFrameTemplateOption {
     ConvertTo(syn::Type),
+    RefTo(syn::Type),
 }
 
 impl Parse for DataFrameTemplateOption {
@@ -37,6 +38,10 @@ impl Parse for DataFrameTemplateOption {
             "convert_to" => {
                 let ty: syn::TypeParen = input.parse()?;
                 Ok(Self::ConvertTo(*ty.elem))
+            }
+            "ref_to" => {
+                let ty: syn::TypeParen = input.parse()?;
+                Ok(Self::RefTo(*ty.elem))
             }
             _ => Err(syn::Error::new(input.span(), "invalid attribute parameter")),
         }
@@ -57,6 +62,7 @@ impl Parse for DataFrameTemplate {
 
         for (idx, field) in structure.fields.iter().enumerate() {
             let mut target_ty = None;
+            let mut target_ref = false;
 
             for attr in &field.attrs {
                 if !attr.path.is_ident("df") {
@@ -68,6 +74,10 @@ impl Parse for DataFrameTemplate {
                 for opt in opts.0 {
                     match opt {
                         DataFrameTemplateOption::ConvertTo(ty) => target_ty = Some(ty),
+                        DataFrameTemplateOption::RefTo(ty) => {
+                            target_ty = Some(ty);
+                            target_ref = true;
+                        }
                     }
                 }
             }
@@ -80,6 +90,7 @@ impl Parse for DataFrameTemplate {
                     .unwrap_or_else(|| idx.to_string()),
                 source_ty: field.ty.clone(),
                 target_ty,
+                target_ref,
                 span: field.span(),
             })
         }
@@ -97,6 +108,7 @@ struct DataFrameTemplateColumn {
     source_ty: syn::Type,
     /// type that value must be converted into before Polars will accept it
     target_ty: Option<syn::Type>,
+    target_ref: bool,
 }
 
 fn derive_into_df_inner(input: TokenStream2) -> TokenStream2 {
@@ -134,8 +146,14 @@ fn derive_into_df_inner(input: TokenStream2) -> TokenStream2 {
                     let name = &field.name;
                     let name_id = quote::format_ident!("{}", name);
 
+                    let converter = if field.target_ref {
+                        quote! { item.#name_id.as_ref() }
+                    } else {
+                        quote! { item.#name_id.into() }
+                    };
+
                     quote_spanned! {field.span=>
-                        #var_name.push(item.#name_id.into());
+                        #var_name.push(#converter);
                     }
                 });
 
