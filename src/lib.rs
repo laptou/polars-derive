@@ -9,3 +9,9 @@ pub trait IntoDataFrame {
         polars::frame::DataFrame::new(Self::into_series(rows))
     }
 }
+
+pub trait FromDataFrame: Sized {
+    fn from_df(
+        df: polars::frame::DataFrame,
+    ) -> Result<Vec<Self>, polars::error::PolarsError>;
+}
