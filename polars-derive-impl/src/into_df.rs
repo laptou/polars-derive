@@ -1,5 +1,7 @@
+use polars::prelude::DataType;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned, ToTokens};
+use syn::spanned::Spanned;
 
 use crate::common::{Convert, Template};
 
@@ -28,7 +30,7 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                     let target_ty = match &field.convert {
                         Some(Convert::AsRef(ty)) => ty,
                         Some(Convert::Into(ty)) => ty,
-                        None => todo!(),
+                        None => &field.ty,
                     };
 
                     quote! { let mut #var_name: Vec<#target_ty> = vec![]; }
@@ -41,12 +43,12 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                 .zip(&field_vector_names)
                 .map(|(field, var_name)| {
                     let name = &field.name;
-                    let name_id = quote::format_ident!("{}", name);
+                    let field_name = quote::format_ident!("{}", name);
 
                     let converter = match &field.convert {
-                        Some(Convert::AsRef(ty)) => Some(quote! { item.#name_id.as_ref() }),
-                        Some(Convert::Into(ty)) => Some(quote! { item.#name_id.into() }),
-                        None => None,
+                        Some(Convert::AsRef(_)) => quote! { item.#field_name.as_ref() },
+                        Some(Convert::Into(_)) => quote! { item.#field_name.into() },
+                        None => quote! { item.#field_name },
                     };
 
                     quote_spanned! {field.span=>
@@ -60,14 +62,7 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                 .iter()
                 .zip(&field_vector_names)
                 .map(|(field, var_name)| {
-                    let name = &field.name;
-
-                    quote_spanned! {field.span=>
-                        <::polars::series::Series as ::polars::prelude::NamedFrom<_, _>>::new(
-                            #name,
-                            #var_name.as_slice()
-                        )
-                    }
+                    vec_to_series(&field.name, var_name, &field.dtype)
                 });
 
         quote! {
@@ -89,5 +84,55 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                 #series_impl
             }
         }
+    }
+}
+
+fn vec_to_series(name: &str, inner: impl ToTokens, dtype: &DataType) -> TokenStream2 {
+    match dtype {
+        DataType::Boolean
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Utf8
+        | DataType::Date
+        | DataType::Datetime(_, _)
+        | DataType::Duration(_)
+        | DataType::Time => {
+            // scalar data types are simple
+            quote_spanned! {inner.span()=>
+                {
+                    let v = #inner;
+                    <::polars::series::Series as ::polars::prelude::NamedFrom<_, _>>::new(
+                      #name,
+                      v.as_slice()
+                    )
+                }
+            }
+        }
+        DataType::List(inner_dtype) => {
+            // for list types, recurse
+            let local = format_ident!("i");
+            let inner_converter = vec_to_series(name, local.clone(), &*inner_dtype);
+
+            quote_spanned! {inner.span()=>
+                {
+                    let v = #inner.into_iter().map(|#local| #inner_converter).collect::<Vec<::polars::series::Series>>();
+                    <::polars::series::Series as ::polars::prelude::NamedFrom<_, _>>::new(
+                      #name,
+                      v.as_slice()
+                    )
+                }
+            }
+        }
+        DataType::Null => todo!(),
+        DataType::Struct(_) => todo!(),
+        DataType::Unknown => todo!(),
     }
 }

@@ -1,5 +1,5 @@
 use polars_derive_impl;
-pub use polars_derive_impl::IntoDataFrame;
+pub use polars_derive_impl::{IntoDataFrame, FromDataFrame};
 
 pub trait IntoDataFrame {
     fn into_series(rows: impl Iterator<Item = Self>) -> Vec<polars::series::Series>;
@@ -12,6 +12,6 @@ pub trait IntoDataFrame {
 
 pub trait FromDataFrame: Sized {
     fn from_df(
-        df: polars::frame::DataFrame,
+        df: &polars::frame::DataFrame,
     ) -> Result<Vec<Self>, polars::error::PolarsError>;
 }

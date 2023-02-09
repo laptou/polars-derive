@@ -19,8 +19,9 @@ impl Parse for Template {
         let mut cols = vec![];
 
         for (idx, field) in structure.fields.iter().enumerate() {
+            let mut dtype = None;
             let mut convert = None;
-            let mut dtype = dtype_for_rtype(&field.ty);
+            let mut optional = false;
 
             for attr in &field.attrs {
                 if !attr.path.is_ident("df") {
@@ -33,10 +34,16 @@ impl Parse for Template {
                     match opt {
                         AttrOption::Into(ty) => convert = Some(Convert::Into(ty)),
                         AttrOption::AsRef(ty) => convert = Some(Convert::AsRef(ty)),
-                        AttrOption::Dtype(dt) => dtype = Ok(dt),
+                        AttrOption::Dtype(dt) => dtype = Some(dt),
+                        AttrOption::Optional(opt) => optional = opt,
                     }
                 }
             }
+
+            let (dtype, optional) = match dtype {
+                Some(dtype) => (dtype, optional),
+                None => dtype_for_rtype_opt(&field.ty)?,
+            };
 
             cols.push(Column {
                 span: field.span(),
@@ -46,8 +53,9 @@ impl Parse for Template {
                     .map(|id| id.to_string())
                     .unwrap_or_else(|| idx.to_string()),
                 ty: field.ty.clone(),
-                dtype: dtype?,
+                dtype,
                 convert,
+                optional,
             })
         }
 
@@ -64,6 +72,7 @@ pub struct Column {
 
     pub ty: syn::Type,
     pub dtype: DataType,
+    pub optional: bool,
     pub convert: Option<Convert>,
 }
 
@@ -81,6 +90,7 @@ pub enum AttrOption {
     Into(syn::Type),
     AsRef(syn::Type),
     Dtype(DataType),
+    Optional(bool),
 }
 
 pub enum Convert {
@@ -91,7 +101,7 @@ pub enum Convert {
 impl Parse for AttrOption {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let id: Ident = input.parse()?;
-        let assign_token = input.parse::<Token![=]>()?; // skip '='
+        let _assign_token = input.parse::<Token![=]>()?; // skip '='
 
         match id.to_string().as_str() {
             "into" => {
@@ -106,11 +116,16 @@ impl Parse for AttrOption {
                 let expr: syn::Expr = input.parse()?;
                 Ok(Self::Dtype(dtype_for_expr(&expr)?))
             }
+            "optional" => {
+                let b: syn::LitBool = input.parse()?;
+                Ok(Self::Optional(b.value))
+            }
             _ => Err(syn::Error::new(input.span(), "invalid attribute parameter")),
         }
     }
 }
 
+/// Gets the corresponding Polars [`DataType`] for a given Rust type.
 fn dtype_for_rtype(ty: &syn::Type) -> syn::Result<DataType> {
     match ty {
         syn::Type::Path(ty) => {
@@ -203,6 +218,36 @@ fn dtype_for_rtype(ty: &syn::Type) -> syn::Result<DataType> {
         ty,
         "unknown type, please specify dtype explicitly",
     ));
+}
+
+/// Gets the corresponding Polars [`DataType`] for a given Rust type. Allows
+/// `Option`, returns a tuple with a `DataType` and a bool indicating whether
+/// the Rust type was optional or not.
+fn dtype_for_rtype_opt(ty: &syn::Type) -> syn::Result<(DataType, bool)> {
+    if let syn::Type::Path(ty) = ty {
+        if ty.path.leading_colon.is_none() && ty.path.segments.len() == 1 {
+            // type with some type params
+            let id = &ty.path.segments[0].ident;
+            if id == "Option" {
+                let args = &ty.path.segments[0].arguments;
+
+                if let syn::PathArguments::AngleBracketed(args) = args {
+                    if args.args.len() == 1 {
+                        if let Some(syn::GenericArgument::Type(ty)) = args.args.first() {
+                            return Ok((dtype_for_rtype(ty)?, true));
+                        }
+                    }
+                }
+
+                return Err(syn::Error::new_spanned(
+                    args,
+                    "invalid arguments for Option",
+                ));
+            }
+        }
+    };
+
+    Ok((dtype_for_rtype(ty)?, false))
 }
 
 fn dtype_for_expr(ex: &syn::Expr) -> syn::Result<DataType> {
