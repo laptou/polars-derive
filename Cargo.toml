@@ -16,3 +16,6 @@ polars = "0.26.1"
 [features]
 default = ["dtype-struct"]
 dtype-struct = ["polars/dtype-struct"]
+
+[dev-dependencies]
+url = "2.3.1"

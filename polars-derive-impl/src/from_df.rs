@@ -1,9 +1,8 @@
 use polars::prelude::DataType;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned, ToTokens};
-use syn::Ident;
 
-use crate::common::Template;
+use crate::common::{ConvertFrom, Template};
 
 pub fn derive(input: TokenStream2) -> TokenStream2 {
     let template: Template = match syn::parse2(input) {
@@ -46,6 +45,26 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
 
         let getter = item_to_rtype(col_name, pat_name, &field.dtype, field.optional);
 
+        let getter = match &field.convert_from {
+          Some(ConvertFrom::TryFrom { borrow }) => {
+            let getter = if *borrow { quote! { ::std::borrow::Borrow::borrow(&#getter) } } else { getter };
+            let ty = &field.ty;
+
+            quote! { 
+              <#ty as TryFrom<_>>::try_from(#getter)
+                .map_err(|err| ::polars::error::PolarsError::SchemaMisMatch(::polars::error::ErrString::from(err.to_string())))?
+            }
+          },
+          Some(ConvertFrom::Custom { fun, borrow }) => {
+            let getter = if *borrow { quote! { &#getter } } else { getter };
+            quote! {
+              #fun(#getter).map_err(|err| ::polars::error::PolarsError::SchemaMisMatch(::polars::error::ErrString::from(err.to_string())))?
+            }
+          },
+          None => getter,
+        };
+
+        // we throw on a little .into() b/c it's a no-op when it is not needed
         quote_spanned! {field.span=>
             #value_name: #getter
         }

@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::spanned::Spanned;
 
-use crate::common::{Convert, Template};
+use crate::common::{ConvertInto, Template, dtype_to_expr};
 
 pub fn derive(input: TokenStream2) -> TokenStream2 {
     let template: Template = match syn::parse2(input) {
@@ -27,9 +27,12 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                 .iter()
                 .zip(&field_vector_names)
                 .map(|(field, var_name)| {
-                    let target_ty = match &field.convert {
-                        Some(Convert::AsRef(ty)) => ty,
-                        Some(Convert::Into(ty)) => ty,
+                    let infer: syn::Type = syn::parse_quote! { _ };
+
+                    let target_ty = match &field.convert_into {
+                        Some(ConvertInto::AsRef(ty)) => ty,
+                        Some(ConvertInto::Into(ty)) => ty,
+                        Some(_) => &infer,
                         None => &field.ty,
                     };
 
@@ -45,9 +48,16 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                     let name = &field.name;
                     let field_name = quote::format_ident!("{}", name);
 
-                    let converter = match &field.convert {
-                        Some(Convert::AsRef(_)) => quote! { item.#field_name.as_ref() },
-                        Some(Convert::Into(_)) => quote! { item.#field_name.into() },
+                    let converter = match &field.convert_into {
+                        Some(ConvertInto::AsRef(_)) => quote! { item.#field_name.as_ref() },
+                        Some(ConvertInto::Into(_)) => quote! { item.#field_name.into() },
+                        Some(ConvertInto::Custom { fun, borrow }) => {
+                            if *borrow {
+                                quote! { #fun(&item.#field_name) }
+                            } else {
+                                quote! { #fun(item.#field_name) }
+                            }
+                        }
                         None => quote! { item.#field_name },
                     };
 
@@ -56,14 +66,11 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                     }
                 });
 
-        let series_decls =
-            template
-                .fields
-                .iter()
-                .zip(&field_vector_names)
-                .map(|(field, var_name)| {
-                    vec_to_series(&field.name, var_name, &field.dtype)
-                });
+        let series_decls = template
+            .fields
+            .iter()
+            .zip(&field_vector_names)
+            .map(|(field, var_name)| vec_to_series(&field.name, var_name, &field.dtype));
 
         quote! {
             #(#field_vector_decls)*
@@ -78,8 +85,22 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
         }
     };
 
+    let field_schema_decls = template.fields.iter().map(|field| {
+        let field_name = &field.name;
+        let dtype = dtype_to_expr(&field.dtype);
+        quote_spanned! {field.ty.span()=>
+          ::polars::datatypes::Field::new(#field_name, #dtype)
+        }
+    });
+
     quote! {
         impl ::polars_derive::IntoDataFrame for #name {
+            fn schema() -> ::polars::prelude::Schema {
+              ::polars::prelude::Schema::from([
+                #(#field_schema_decls),*
+              ].into_iter())
+            }
+
             fn into_series(rows: impl Iterator<Item = Self>) -> Vec<::polars::series::Series> {
                 #series_impl
             }
