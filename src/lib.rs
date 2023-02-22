@@ -30,7 +30,7 @@ pub use polars_derive_impl::{FromDataFrame, IntoDataFrame};
 ///  - `#[df(optional = <bool>)]`: indicates explicitly whether the data in this
 ///    column is considered optional or not. will cause type errors if this does
 ///    not match the type of the field
-/// 
+///
 /// If the data type is not specified explicitly using `#[df(dtype)]`, it will
 /// be inferred from the type of the field. Fields can be `Option<T>`, but inner
 /// `Option`s (ex.: `Vec<Option<T>>`) are currently unsupported.
@@ -68,10 +68,25 @@ pub trait IntoDataFrame {
 ///  - `#[df(optional = <bool>)]`: indicates explicitly whether the data in this
 ///    column is considered optional or not. will cause type errors if this does
 ///    not match the type of the field
-/// 
+///
 /// If the data type is not specified explicitly using `#[df(dtype)]`, it will
 /// be inferred from the type of the field. Fields can be `Option<T>`, but inner
 /// `Option`s (ex.: `Vec<Option<T>>`) are currently unsupported.
 pub trait FromDataFrame: Sized {
     fn from_df(df: &DataFrame) -> PolarsResult<Vec<Self>>;
+}
+
+pub mod helpers {
+    use polars::export::chrono::NaiveDateTime;
+    use thiserror::Error;
+
+    #[derive(Error, Debug)]
+    pub enum Error {
+        #[error("invalid datetime")]
+        InvalidDatetime,
+    }
+
+    pub fn deserialize_datetime(timestamp: i64) -> Result<NaiveDateTime, Error> {
+        NaiveDateTime::from_timestamp_millis(timestamp).ok_or(Error::InvalidDatetime)
+    }
 }

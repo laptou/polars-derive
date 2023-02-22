@@ -335,6 +335,42 @@ pub(crate) fn expr_to_dtype(ex: &syn::Expr) -> syn::Result<DataType> {
                         &*args.first().unwrap(),
                     )?)));
                 }
+
+                if callee.path.is_ident("Datetime") {
+                    match args.len() {
+                        1 => {
+                            return Ok(DataType::Datetime(
+                                match &args[0] {
+                                    syn::Expr::Path(p) => {
+                                        let id = p.path.get_ident();
+                                        let id = id.map(|i| i.to_string());
+                                        let id = id.as_deref();
+
+                                        match id {
+                                            Some("Milliseconds") => TimeUnit::Milliseconds,
+                                            Some("Microseconds") => TimeUnit::Microseconds,
+                                            Some("Nanoseconds") => TimeUnit::Nanoseconds,
+                                            _ => {
+                                                return Err(syn::Error::new_spanned(
+                                                    p,
+                                                    "invalid time unit",
+                                                ))
+                                            }
+                                        }
+                                    }
+                                    other => {
+                                        return Err(syn::Error::new_spanned(
+                                            other,
+                                            "invalid time unit",
+                                        ))
+                                    }
+                                },
+                                None,
+                            ))
+                        }
+                        _ => return Err(syn::Error::new_spanned(args, "Datetime takes 1 argument"))
+                    }
+                }
             }
         }
 
