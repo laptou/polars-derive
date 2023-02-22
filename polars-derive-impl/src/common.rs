@@ -1,6 +1,6 @@
 use polars::prelude::{DataType, Field, TimeUnit};
 use proc_macro2::TokenStream;
-use syn::{parse::Parse, spanned::Spanned, Ident, ItemStruct, Token};
+use syn::{parse::Parse, parse_quote, spanned::Spanned, Ident, ItemStruct, Token};
 
 pub struct Template {
     pub fields: Vec<Column>,
@@ -71,6 +71,14 @@ impl Parse for Template {
                 let (dt, opt) = dtype_for_rtype_opt(&field.ty)?;
                 dtype = Some(dt);
                 optional = opt;
+            }
+
+            // if we are not using a custom conversion function for Datetime, use our helper by default
+            if let (Some(DataType::Datetime(_, _)), None) = (&dtype, &convert_from) {
+                convert_from = Some(ConvertFrom::Custom {
+                    fun: parse_quote! { ::polars_derive::helpers::deserialize_datetime },
+                    borrow: false,
+                })
             }
 
             cols.push(Column {
@@ -368,7 +376,9 @@ pub(crate) fn expr_to_dtype(ex: &syn::Expr) -> syn::Result<DataType> {
                                 None,
                             ))
                         }
-                        _ => return Err(syn::Error::new_spanned(args, "Datetime takes 1 argument"))
+                        _ => {
+                            return Err(syn::Error::new_spanned(args, "Datetime takes 1 argument"))
+                        }
                     }
                 }
             }

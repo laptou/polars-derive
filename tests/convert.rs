@@ -2,15 +2,13 @@ use std::io::Cursor;
 
 use polars::export::chrono::{Local, NaiveDateTime, Timelike};
 use polars::prelude::*;
-use polars_derive::{helpers::deserialize_datetime, FromDataFrame, IntoDataFrame};
+use polars_derive::{FromDataFrame, IntoDataFrame};
 use url::Url;
 
 #[derive(IntoDataFrame, FromDataFrame, Clone, PartialEq, Eq, Debug)]
 struct TestStruct {
     #[df(into = String, try_from_borrow)]
     location: Url,
-
-    #[df(deserialize_with = deserialize_datetime)]
     time: NaiveDateTime,
 }
 
