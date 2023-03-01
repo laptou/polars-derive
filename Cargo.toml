@@ -12,7 +12,7 @@ thiserror = "1.0.38"
 members = ["polars-derive-impl"]
 
 [workspace.dependencies]
-polars = "0.26.1"
+polars = "0.27"
 
 [features]
 default = ["dtype-struct"]
