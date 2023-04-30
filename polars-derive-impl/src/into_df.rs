@@ -3,7 +3,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::spanned::Spanned;
 
-use crate::common::{ConvertInto, Template, dtype_to_expr};
+use crate::common::{dtype_to_expr, rtype_for_dtype, ConvertInto, Template};
 
 pub fn derive(input: TokenStream2) -> TokenStream2 {
     let template: Template = match syn::parse2(input) {
@@ -27,12 +27,12 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
                 .iter()
                 .zip(&field_vector_names)
                 .map(|(field, var_name)| {
-                    let infer: syn::Type = syn::parse_quote! { _ };
+                    let target_ty = rtype_for_dtype(&field.dtype);
 
                     let target_ty = match &field.convert_into {
                         Some(ConvertInto::AsRef(ty)) => ty,
                         Some(ConvertInto::Into(ty)) => ty,
-                        Some(_) => &infer,
+                        Some(ConvertInto::Custom { .. }) => &target_ty,
                         None => &field.ty,
                     };
 
@@ -125,6 +125,7 @@ fn vec_to_series(name: &str, inner: impl ToTokens, dtype: &DataType) -> TokenStr
         | DataType::Date
         | DataType::Datetime(_, _)
         | DataType::Duration(_)
+        | DataType::Binary
         | DataType::Time => {
             // scalar data types are simple
             quote_spanned! {inner.span()=>

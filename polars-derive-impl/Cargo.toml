@@ -17,7 +17,6 @@ syn = { version = "1.0.107", features = ["parsing", "printing"] }
 [features]
 default = ["dtype-struct"]
 dtype-struct = ["polars/dtype-struct"]
-dtype-binary = ["polars/dtype-binary"]
 dtype-i8 = ["polars/dtype-i8"]
 dtype-u8 = ["polars/dtype-u8"]
 dtype-i16 = ["polars/dtype-i16"]

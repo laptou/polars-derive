@@ -4,8 +4,8 @@ use proc_macro2::TokenStream as TokenStream2;
 extern crate proc_macro;
 
 mod common;
-mod into_df;
 mod from_df;
+mod into_df;
 
 #[proc_macro_derive(IntoDataFrame, attributes(df))]
 pub fn derive_into_df(input: TokenStream) -> TokenStream {

@@ -52,13 +52,13 @@ pub fn derive(input: TokenStream2) -> TokenStream2 {
 
             quote! { 
               <#ty as TryFrom<_>>::try_from(#getter)
-                .map_err(|err| ::polars::error::PolarsError::SchemaMisMatch(::polars::error::ErrString::from(err.to_string())))?
+                .map_err(|err| ::polars::error::PolarsError::SchemaMismatch(::polars::error::ErrString::from(err.to_string())))?
             }
           },
           Some(ConvertFrom::Custom { fun, borrow }) => {
             let getter = if *borrow { quote! { &#getter } } else { getter };
             quote! {
-              #fun(#getter).map_err(|err| ::polars::error::PolarsError::SchemaMisMatch(::polars::error::ErrString::from(err.to_string())))?
+              #fun(#getter).map_err(|err| ::polars::error::PolarsError::SchemaMismatch(::polars::error::ErrString::from(err.to_string())))?
             }
           },
           None => getter,
@@ -112,6 +112,7 @@ fn series_to_rtype(inner: impl ToTokens, dtype: &DataType) -> TokenStream2 {
         DataType::Datetime(_, _) => "datetime",
         DataType::Duration(_) => "duration",
         DataType::Time => "time",
+        DataType::Binary => "binary",
         DataType::List(inner_dtype) => {
             let local = format_ident!("l");
             let inner_converter = series_to_rtype(local.clone(), &*inner_dtype);
@@ -121,6 +122,7 @@ fn series_to_rtype(inner: impl ToTokens, dtype: &DataType) -> TokenStream2 {
         }
         _ => unimplemented!("dtype not implemented"),
     };
+
     let dtype_method = format_ident!("{}", dtype_method);
 
     quote! { #inner.#dtype_method()? }
@@ -166,6 +168,10 @@ fn item_to_rtype(
             // for now we only support owned strings for FromDataFrame
             // Polars gives us a &str so we call to_owned()
             Some((quote! { |s| s.to_owned() }, false))
+        }
+        DataType::Binary => {
+            // convert &[u8] to Vec<u8>
+            Some((quote! { |s| Vec::from(s) }, false))
         }
         _ => None,
     };

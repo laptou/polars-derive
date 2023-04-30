@@ -120,8 +120,7 @@ pub struct Attr(Vec<AttrOption>);
 
 impl Parse for Attr {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let p =
-            syn::punctuated::Punctuated::<AttrOption, Token![,]>::parse_separated_nonempty(input)?;
+        let p = syn::punctuated::Punctuated::<AttrOption, Token![,]>::parse_terminated(input)?;
         Ok(Self(p.into_iter().collect()))
     }
 }
@@ -242,6 +241,13 @@ fn dtype_for_rtype(ty: &syn::Type) -> syn::Result<DataType> {
                         if let syn::PathArguments::AngleBracketed(args) = args {
                             if args.args.len() == 1 {
                                 if let Some(syn::GenericArgument::Type(ty)) = args.args.first() {
+                                    // if it's a Vec<u8>, infer Binary; otherwise, infer List(T)
+                                    if let syn::Type::Path(ty) = ty {
+                                        if ty.path.is_ident("u8") {
+                                            return Ok(DataType::Binary);
+                                        }
+                                    }
+
                                     return Ok(DataType::List(Box::new(dtype_for_rtype(ty)?)));
                                 }
                             } else {
@@ -302,6 +308,33 @@ fn dtype_for_rtype(ty: &syn::Type) -> syn::Result<DataType> {
         ty,
         "unknown type, please specify dtype explicitly",
     ));
+}
+
+pub(crate) fn rtype_for_dtype(ty: &DataType) -> syn::Type {
+    match ty {
+        DataType::Boolean => parse_quote! { bool },
+        DataType::UInt8 => parse_quote! { u8 },
+        DataType::UInt16 => parse_quote! { u16 },
+        DataType::UInt32 => parse_quote! { u32 },
+        DataType::UInt64 => parse_quote! { u64 },
+        DataType::Int8 => parse_quote! { i8 },
+        DataType::Int16 => parse_quote! { i16 },
+        DataType::Int32 => parse_quote! { i32 },
+        DataType::Int64 => parse_quote! { i64 },
+        DataType::Float32 => parse_quote! { f32 },
+        DataType::Float64 => parse_quote! { f64 },
+        DataType::Utf8 => parse_quote! { String },
+        DataType::Date => parse_quote! { ::polars::export::chrono::NaiveDate },
+        DataType::Datetime(_, _) => parse_quote! { ::polars::export::chrono::NaiveDateTime },
+        DataType::Duration(_) => parse_quote! { ::polars::export::chrono::Duration },
+        DataType::Time => parse_quote! { ::polars::export::chrono::NaiveTime },
+        DataType::Binary => parse_quote! { Vec<u8> },
+        DataType::List(inner) => {
+            let inner = rtype_for_dtype(&*inner);
+            parse_quote! { Vec<#inner> }
+        }
+        _ => parse_quote! { _ },
+    }
 }
 
 /// Gets the corresponding Polars [`DataType`] for a given Rust type. Allows
@@ -432,6 +465,7 @@ pub(crate) fn dtype_to_expr(dtype: &DataType) -> TokenStream {
         DataType::Float64 => quote! { ::polars::datatypes::DataType::Float64 },
         DataType::Utf8 => quote! { ::polars::datatypes::DataType::Utf8 },
         DataType::Date => quote! { ::polars::datatypes::DataType::Date },
+        DataType::Binary => quote! { ::polars::datatypes::DataType::Binary },
         DataType::Datetime(tu, tz) => {
             let tu = time_unit_to_expr(*tu);
             let tz = match tz {
@@ -451,7 +485,7 @@ pub(crate) fn dtype_to_expr(dtype: &DataType) -> TokenStream {
         }
         DataType::Null => quote! { ::polars::datatypes::DataType::Null },
         DataType::Unknown => quote! { ::polars::datatypes::DataType::Unknown },
-        _ => unimplemented!(),
+        other => unimplemented!("unimplemented dtype {other:?}"),
     }
 }
 
